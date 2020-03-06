@@ -4,10 +4,10 @@ import pandas as pd
 
 class CellHppcData:
     """
-    Battery cell data from HPPC test.
+    Data from HPPC battey cell test.
     """
 
-    def __init__(self, path):
+    def __init__(self, path, all_data=False):
         """
         Initialize with path to HPPC data file.
 
@@ -15,27 +15,45 @@ class CellHppcData:
         ----------
         path : str
             Path to HPPC data file.
+        all_data : bool
+            By default `all_data=False` will read only the section of HPPC
+            data from the data file. When `all_data=True` then read all the
+            data in the data file.
 
         Attributes
         ----------
         time : vector
-            Time vector for HPPC battery test data [s]
+            Time vector for HPPC battery cell test data [s]
         current : vector
-            Current from HPPC battery during test [A]
+            Current from HPPC battery cell during test [A]
         voltage : vector
-            Voltage from HPPC battery during test [V]
-        data : vector
-            Data flags from HPPC battery test [-]
+            Voltage from HPPC battery cell during test [V]
+        flags : vector
+            Flags for start and stop events in the HPPC battery cell data [-]
         """
         df = pd.read_csv(path)
-        self.time = df['Time(s)'].values
-        self.current = df['Current(A)'].values
-        self.voltage = df['Voltage(V)'].values
-        self.data = df['Data'].fillna(' ').values
 
-    def get_ids(self):
+        if all_data:
+            self.time = df['Time(s)'].values
+            self.current = df['Current(A)'].values
+            self.voltage = df['Voltage(V)'].values
+            self.flags = df['Data'].fillna(' ').values
+        else:
+            time = df['Time(s)'].values
+            current = df['Current(A)'].values
+            voltage = df['Voltage(V)'].values
+            flags = df['Data'].fillna(' ').values
+
+            # time vector is scaled to begin at 0, this helps when calculating curve fit coefficients
+            ids = np.where(flags == 'S')[0]
+            self.time = time[ids[1]:] - time[ids[1]]
+            self.current = current[ids[1]:]
+            self.voltage = voltage[ids[1]:]
+            self.flags = flags[ids[1]:]
+
+    def get_indices_s(self):
         """
-        Find indices in data that represent the `S` flag. Start and stop
+        Find all indices in data that represent the `S` flag. Start and stop
         procedures in the experiment are depcited by the `S` flag.
 
         Returns
@@ -43,10 +61,10 @@ class CellHppcData:
         ids : vector
             Indices of start and stop points in data.
         """
-        ids = np.where(self.data == 'S')[0]
+        ids = np.where(self.flags == 'S')[0]
         return ids
 
-    def get_idq(self):
+    def get_indices_q(self):
         """
         Find index in data represented by `Q` which signals end of experiment.
 
@@ -55,25 +73,28 @@ class CellHppcData:
         idq : int
             Index of final stop point in data.
         """
-        idq = np.where(self.data == 'Q')[0]
+        idq = np.where(self.flags == 'Q')[0]
         return idq
 
-    def get_idx(self):
+    def get_indices_pulse(self):
         """
-        Construct indices for equivalent circuit model. Indices are in the short
-        pulse section of the HPPC data.
+        Indices representing short pulse section in the HPPC battery cell
+        data. Indices are given for each 10% SOC section.
 
         Returns
         -------
-        id0, id1, id2, id3, id4 : tuple
-            Indices used for equivalent circuit model development.
-            id0 = start of pulse discharge
-            id1 = time step after pulse discharge starts
-            id2 = end of pulse discharge ends
-            id3 = time step after pulse discharge ends
-            id4 = end of pulse discharge rest period
+        id0 : ndarray
+            Indices at start of pulse discharge for each 10% SOC section.
+        id1 : ndarray
+            Indices at time step after pulse discharge starts for each 10% SOC section.
+        id2 : ndarray
+            Indices at end of pulse discharge for each 10% SOC section.
+        id3 : ndarray
+            Indices at time step after pulse discharge ends for each 10% SOC section.
+        id4 : ndarray
+            Indices at end of pulse discharge rest period for each 10% SOC section.
         """
-        ids = self.get_ids()
+        ids = self.get_indices_s()
         id0 = ids[0::5]
         id1 = id0 + 1
         id2 = ids[1::5]
@@ -81,43 +102,29 @@ class CellHppcData:
         id4 = ids[2::5]
         return id0, id1, id2, id3, id4
 
-    def get_idrc(self):
+    def get_indices_discharge(self):
         """
-        Construct indices for estimating RC parameters. Indices are in the long
-        HPPC section where constant discharge occurs.
+        Indices representing long discharge section where constant discharge
+        occurs in the HPPC battery cell data. Indices are given for each 10%
+        SOC section.
 
         Returns
         -------
-        id0, id1, id2, id3, id4 : tuple
-            Indices used to determine RC parameters.
-            id0 = start of constant discharge
-            id1 = time step after constant discharge starts
-            id2 = end of constant discharge
-            id3 = time step after constant discharge ends
-            id4 = end of rest period
+        id0 : ndarray
+            Indices at start of constant discharge for each 10% SOC section.
+        id1 : ndarray
+            Indices at time step after constant discharge starts for each 10% SOC section.
+        id2 : ndarray
+            Indices at end of constant discharge for each 10% SOC section.
+        id3 : ndarray
+            Indices at time step after constant discharge ends for each 10% SOC section.
+        id4 : ndarray
+            Indices at end of constant discharge rest period for each 10% SOC section.
         """
-        ids = self.get_ids()
+        ids = self.get_indices_s()
         id0 = ids[3::5][:-1]
         id1 = id0 + 1
         id2 = ids[4::5]
         id3 = id2 + 1
         id4 = ids[5::5]
         return id0, id1, id2, id3, id4
-
-    @classmethod
-    def process(cls, path):
-        """
-        Process original HPPC data for use with equivalent circuit model. The
-        S-flag determines start and stop indices `ids` in the data. Data
-        preceding the first start/stop point is removed and remaining data is
-        assigned to class attributes.
-        """
-        data = cls(path)
-
-        ids = data.get_ids()
-        data.time = data.time[ids[1]:]
-        data.current = data.current[ids[1]:]
-        data.voltage = data.voltage[ids[1]:]
-        data.data = data.data[ids[1]:]
-
-        return data

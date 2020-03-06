@@ -1,29 +1,29 @@
 """
-Run SOC and OCV for the battery cell HPPC data.
+Use HPPC battery module data to calculate state of charge (SOC) and open
+circuit voltage (OCV) for the battery module.
 """
 
 import matplotlib.pyplot as plt
 
 import params
-from ecm import CellHppcData
-from ecm import EquivCircModel
-from utils import config_ax
+from ecm import ModuleHppcData
+from ecm import ModuleEcm
+from ecm import config_ax
 
-# Battery cell HPPC data and equivalent circuit model
+# Battery module HPPC data and equivalent circuit model
 # ----------------------------------------------------------------------------
 
-file_hppc = 'data/cell-low-current-hppc-25c-2.csv'
-data = CellHppcData.process(file_hppc)
+file = '../data/module1-electchar-65ah-23deg.csv'
+data = ModuleHppcData(file)
 
-ecm = EquivCircModel(data, params)
+ecm = ModuleEcm(data, params)
 soc = ecm.soc()
 ocv, i_pts, t_pts, v_pts, z_pts = ecm.ocv(soc, pts=True)
 
 # Print state of charge (SOC) and open circuit voltage (OCV) points
 # ----------------------------------------------------------------------------
 
-print('--- State of charge (SOC) and open circuit voltage (OCV) ---')
-print(f"{'SOC [-]':10} {'OCV [V]':10}")
+print(f"\n{'SOC [-]':10} {'OCV [V]':10}")
 for idx, z in enumerate(z_pts):
     print(f'{z:<10.4f} {v_pts[idx]:<10.4f}')
 
@@ -53,7 +53,8 @@ ax2.tick_params('y', colors='m')
 ax2.set_frame_on(False)
 
 fig, ax = plt.subplots(tight_layout=True)
-ax.plot(z_pts, v_pts, 'm', marker='x')
-config_ax(ax, xylabels=('State of charge [-]', 'Open circuit voltage [V]'))
+ax.plot(z_pts, v_pts, 'x', color='C0', label='ocv pts')
+ax.plot(soc, ocv, color='C1', label='ocv')
+config_ax(ax, xylabels=('State of charge [-]', 'Open circuit voltage [V]'), loc='best')
 
 plt.show()

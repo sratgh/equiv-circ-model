@@ -2,30 +2,29 @@ import numpy as np
 from scipy.optimize import curve_fit
 
 
-class EquivCircModel:
+class ModuleEcm:
     """
-    Equivalent circuit model (ECM) developed from HPPC battery cell data.
+    Equivalent circuit model (ECM) developed from HPPC battery module data.
 
     Parameters
     ----------
-    data : HppcData
-        Data from the HPPC battery cell test. This parameter must be a class
-        object of `HppcData`.
+    data : ModuleHppcData
+        Data from the HPPC battery module test.
     params : module
-        Model parameters for the battery calculations.
+        Parameters for the battery cell and module.
 
     Attributes
     ----------
     current : vector
-        Current from HPPC battery during test [A]
+        Current from HPPC battery module test [A]
     time : vector
-        Time vector for HPPC battery test data [s]
+        Time from HPPC battery module test [s]
     voltage : vector
-        Voltage from HPPC battery during test [V]
-    idx : tuple
-        Indices from HPPC battery test data.
-    idrc : tuple
-        Indices from HPPC battery test data to determine RC parameters.
+        Voltage from HPPC battery module test [V]
+    idd : tuple
+        Indices representing long discharge section where constant discharge
+        occurs in the HPPC battery module data. Indices are given for each 10%
+        SOC section.
 
     Methods
     -------
@@ -50,12 +49,17 @@ class EquivCircModel:
         self.current = data.current
         self.time = data.time
         self.voltage = data.voltage
-        self.idx = data.get_idx()
-        self.idrc = data.get_idrc()
+        self.idd = data.get_indices_discharge()
 
         self.eta_chg = params.eta_chg
         self.eta_dis = params.eta_dis
-        self.q_cell = params.q_cell
+        self.q_module = params.q_module
+
+        self.a_surf = params.a_surf
+        self.cp_module = params.cp_module
+        self.h_conv = params.h_conv
+        self.m_module = params.m_module
+        self.tinf = params.tinf
 
     @staticmethod
     def func_otc(t, a, b, alpha):
@@ -121,19 +125,17 @@ class EquivCircModel:
         current = self.current
         time = self.time
 
-        q = self.q_cell * 3600
-        dt = np.diff(time)
+        q = self.q_module * 3600    # convert from Ah to As
+        dt = np.diff(time)          # time steps in seconds
+        z = np.ones(len(current))   # initialize state of charge array
 
-        nc = len(current)
-        z = np.ones(nc)
-
-        for k in range(1, nc):
-            i = current[k]
+        # determine state of charge at each time step
+        for k, i in enumerate(current[1:]):
             if i > 0:
                 eta = self.eta_chg
             else:
                 eta = self.eta_dis
-            z[k] = z[k - 1] + ((eta * i * dt[k - 1]) / q)
+            z[k + 1] = z[k] + ((eta * i * dt[k]) / q)
 
         return z
 
@@ -167,7 +169,7 @@ class EquivCircModel:
             State of charge [-] at 100% SOC to 0% SOC in 10% increments.
         """
         if pts is True:
-            id0 = self.idx[0]
+            id0 = self.idd[0]
             v_pts = np.append(self.voltage[id0], self.voltage[-1])
             z_pts = np.append(soc[id0], soc[-1])
             i_pts = np.append(self.current[id0], self.current[-1])
@@ -179,7 +181,7 @@ class EquivCircModel:
             ocv = np.interp(soc, z_pts[::-1], v_pts[::-1])
             return ocv
         else:
-            id0 = self.idx[0]
+            id0 = self.idd[0]
             v_pts = np.append(self.voltage[id0], self.voltage[-1])
             z_pts = np.append(soc[id0], soc[-1])
             ocv = np.interp(soc, z_pts[::-1], v_pts[::-1])
@@ -202,21 +204,25 @@ class EquivCircModel:
         coeff : array
             Coefficients at each 10% change in SOC.
         """
-        _, _, id2, _, id4 = self.idrc
+
+        # index points for curve fit, id2 and id4 must be same length
+        _, _, id2, _, id4 = self.idd
+        id2 = id2[:-1]
+
         nrow = len(id2)
         coeff = np.zeros((nrow, ncoeff))
 
         for i in range(nrow):
             start = id2[i]
             end = id4[i]
-            t_curve = self.time[start:end]
-            v_curve = self.voltage[start:end]
-            t_scale = t_curve - t_curve[0]
+            t = self.time[start:end + 1]
+            t_curve = t - t[0]
+            v_curve = self.voltage[start:end + 1]
             if ncoeff == 3:
-                guess = v_curve[-1], 0.01, 0.01
+                guess = v_curve[-1], 0.0644, 0.0012
             elif ncoeff == 5:
-                guess = v_curve[-1], 0.01, 0.01, 0.001, 0.01
-            popt, pcov = curve_fit(func, t_scale, v_curve, p0=guess)
+                guess = v_curve[-1], 0.0724, 0.0575, 0.0223, 0.0007
+            popt, pcov = curve_fit(func, t_curve, v_curve, p0=guess, maxfev=3000)
             coeff[i] = popt
 
         return coeff
@@ -252,7 +258,11 @@ class EquivCircModel:
             c2 : float
                 Capacitance in second RC branch [F]
         """
-        id0, id1, id2, _, _, = self.idrc
+        id0, id1, id2, _, _, = self.idd
+        id0 = np.delete(id0, -1)    # indices must be same length as `coeff`
+        id1 = np.delete(id1, -1)
+        id2 = np.delete(id2, -1)
+
         nrow = len(id0)
         rctau = np.zeros((nrow, 7))
 
@@ -306,3 +316,22 @@ class EquivCircModel:
 
         vt = ocv + v0 + v1 + v2
         return vt
+
+    def calc_temperature(self, ti, ocv, vt):
+        """
+        Calculate temperature of the battery module.
+        """
+        dt = np.diff(self.time)
+        nc = len(self.current)
+
+        temps = np.zeros(nc)
+        temps[0] = ti
+
+        for k in range(nc - 1):
+            i = self.current[k]
+            q_irrev = i * (vt[k] - ocv[k])
+            q_conv = self.h_conv * self.a_surf * (self.tinf - temps[k])
+            q = q_irrev + q_conv
+            temps[k + 1] = temps[k] + (q / (self.m_module * self.cp_module)) * dt[k]
+
+        return temps

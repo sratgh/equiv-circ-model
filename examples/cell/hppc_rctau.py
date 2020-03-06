@@ -1,23 +1,31 @@
 """
-Run RC parameters for the battery cell HPPC data.
-
-Print tau, resistor, and capacitor values (RC parameters) for each SOC section
-in the HPPC data.
+Use HPPC battery cell data to determine the tau, resistor and capacitor values
+(RC parameters) for each SOC section. Curve fit coefficients are determined
+from the two time constant (TTC) function.
 """
 
 import params
 from ecm import CellHppcData
-from ecm import EquivCircModel
+from ecm import CellEcm
 
 # Battery cell HPPC data and equivalent circuit model
 # ----------------------------------------------------------------------------
 
-file_hppc = 'data/cell-low-current-hppc-25c-2.csv'
-data = CellHppcData.process(file_hppc)
+file = '../data/cell-low-current-hppc-25c-2.csv'
+data = CellHppcData(file)
 
-ecm = EquivCircModel(data, params)
+ecm = CellEcm(data, params)
 coeffs = ecm.curve_fit_coeff(ecm.func_ttc, 5)
 rctau = ecm.rctau_ttc(coeffs)
+
+# Print curve fit coefficients
+# ----------------------------------------------------------------------------
+
+print('\n--- Curve fit coefficients from TTC ---')
+print('a\tb\tc\talpha\tbeta')
+for c in coeffs:
+    print(f'{c[0]:.4f}\t{c[1]:.4f}\t{c[2]:.4f}\t{c[3]:.4f}\t{c[4]:.4f}')
+print('')
 
 # Print tau, resistor, and capacitor values
 # ----------------------------------------------------------------------------
